@@ -42,6 +42,10 @@ return [
 
     // Templates that may be requested. Each must correspond to a file
     // app/templates/<name>.php that returns ['html' => ..., 'text' => ...].
+    // Used only when the calling FCS app requests a server-side rendered
+    // template by name. The preferred path is passthrough (FCS sends
+    // pre-rendered `html` + `text` directly), in which case this list is
+    // ignored. The remaining entries are legacy contact-form templates.
     'allowed_templates' => [
         'contact_admin',
         'contact_confirmation',

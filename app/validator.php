@@ -13,6 +13,8 @@ function validate_payload(array $payload, string $sourceApp, array $config): arr
     $out = [
         'source_app' => $sourceApp,
         'template'   => null,
+        'html'       => null,
+        'text'       => null,
         'to'         => null,
         'from_name'  => null,
         'from_email' => null,
@@ -25,13 +27,38 @@ function validate_payload(array $payload, string $sourceApp, array $config): arr
         $errors['source_app'] = 'Does not match API key';
     }
 
+    // Two send modes:
+    //   (a) Server-side template — caller passes `template` + `data` and the
+    //       relay renders the matching app/templates/<name>.php file.
+    //   (b) Passthrough — caller passes pre-rendered `html` (required) and
+    //       optionally `text` directly. Used when the FCS app owns templating
+    //       (admin-editable DB-backed templates) and treats mail-api as a
+    //       dumb transport.
+    //
+    // Exactly one of {template, html} must be present.
     $template = $payload['template'] ?? null;
-    if (!is_string($template) || $template === '') {
-        $errors['template'] = 'Required';
-    } elseif (!in_array($template, $config['allowed_templates'], true)) {
-        $errors['template'] = 'Unknown template';
+    $htmlBody = $payload['html']     ?? null;
+
+    if (is_string($template) && $template !== '') {
+        if (!in_array($template, $config['allowed_templates'], true)) {
+            $errors['template'] = 'Unknown template';
+        } else {
+            $out['template'] = $template;
+        }
+        if ($htmlBody !== null) {
+            $errors['html'] = 'Cannot combine html with template';
+        }
+    } elseif (is_string($htmlBody) && $htmlBody !== '') {
+        $out['html'] = $htmlBody;
+        if (isset($payload['text'])) {
+            if (!is_string($payload['text'])) {
+                $errors['text'] = 'Must be a string';
+            } else {
+                $out['text'] = $payload['text'];
+            }
+        }
     } else {
-        $out['template'] = $template;
+        $errors['template'] = 'Either template or html is required';
     }
 
     $to = $payload['to'] ?? null;

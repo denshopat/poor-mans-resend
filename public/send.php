@@ -92,7 +92,7 @@ $remoteIp = $_SERVER['REMOTE_ADDR'] ?? null;
 
 $logId = log_insert($db, [
     'source_app'     => $sourceApp,
-    'template'       => $msg['template'],
+    'template'       => $msg['template'] ?? 'passthrough',
     'from_email'     => $msg['from_email'],
     'to_email'       => $msg['to'],
     'reply_to_email' => $msg['reply_to'],
@@ -102,23 +102,28 @@ $logId = log_insert($db, [
     'remote_ip'      => $remoteIp,
 ]);
 
-try {
-    $rendered = render_template(
-        $appRoot . '/app/templates',
-        $msg['template'],
-        $msg['data'],
-        $msg['subject']
-    );
-} catch (Throwable $e) {
-    log_update($db, $logId, [
-        'status'        => 'failed',
-        'error_message' => 'Template render error: ' . $e->getMessage(),
-    ]);
-    respond(500, [
-        'success' => false,
-        'id'      => $logId,
-        'error'   => 'Template render failed',
-    ]);
+if ($msg['html'] !== null) {
+    // Passthrough mode — caller owns templating.
+    $rendered = ['html' => $msg['html'], 'text' => $msg['text'] ?? ''];
+} else {
+    try {
+        $rendered = render_template(
+            $appRoot . '/app/templates',
+            $msg['template'],
+            $msg['data'],
+            $msg['subject']
+        );
+    } catch (Throwable $e) {
+        log_update($db, $logId, [
+            'status'        => 'failed',
+            'error_message' => 'Template render error: ' . $e->getMessage(),
+        ]);
+        respond(500, [
+            'success' => false,
+            'id'      => $logId,
+            'error'   => 'Template render failed',
+        ]);
+    }
 }
 
 log_update($db, $logId, ['status' => 'sending']);
