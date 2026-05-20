@@ -3,6 +3,12 @@
 
 CREATE TABLE IF NOT EXISTS email_log (
     id              BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+    -- Fan-out batch fields. NULL for single-recipient sends; populated for
+    -- multi-recipient requests so all N rows share one batch_id with their
+    -- position (0..batch_size-1) recorded in batch_index. See send.php.
+    batch_id        VARCHAR(36)     NULL,
+    batch_size      INT             NULL,
+    batch_index     INT             NULL,
     created_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME        NOT NULL DEFAULT CURRENT_TIMESTAMP
                                     ON UPDATE CURRENT_TIMESTAMP,
@@ -24,5 +30,6 @@ CREATE TABLE IF NOT EXISTS email_log (
     KEY idx_created_at (created_at),
     KEY idx_source_app (source_app),
     KEY idx_status     (status),
-    KEY idx_to_email   (to_email)
+    KEY idx_to_email   (to_email),
+    KEY idx_batch_id   (batch_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

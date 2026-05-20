@@ -53,6 +53,90 @@ function mailer_send(array $smtpConfig, array $msg): array
 }
 
 /**
+ * Sends the same message body to many recipients over a single authenticated
+ * SMTP connection (SMTPKeepAlive). One TCP+TLS+AUTH handshake amortised
+ * across the whole batch — essential for newsletter-shaped workloads.
+ *
+ * $perRecipient is called as ($index, $recipient, $result) after each send,
+ * letting the caller update its log row with real-time status.
+ *
+ * Returns an array of per-recipient results (same shape as mailer_send),
+ * indexed positionally to $recipients.
+ */
+function mailer_send_many(array $smtpConfig, array $msg, array $recipients, ?callable $perRecipient = null): array
+{
+    $mail = new PHPMailer(true);
+    $results = [];
+
+    try {
+        $mail->isSMTP();
+        $mail->Host          = $smtpConfig['host'];
+        $mail->Port          = (int)$smtpConfig['port'];
+        $mail->SMTPAuth      = true;
+        $mail->Username      = $smtpConfig['username'];
+        $mail->Password      = $smtpConfig['password'];
+        $mail->SMTPSecure    = ($smtpConfig['encryption'] ?? 'ssl') === 'tls'
+            ? PHPMailer::ENCRYPTION_STARTTLS
+            : PHPMailer::ENCRYPTION_SMTPS;
+        $mail->Timeout       = (int)($smtpConfig['timeout'] ?? 30);
+        $mail->CharSet       = 'UTF-8';
+        $mail->SMTPKeepAlive = true;
+
+        $mail->setFrom($msg['from_email'], $msg['from_name'] ?? '');
+        if (!empty($msg['reply_to'])) {
+            $mail->addReplyTo($msg['reply_to']);
+        }
+        $mail->Subject = $msg['subject'];
+        $mail->isHTML(true);
+        $mail->Body    = $msg['html'];
+        $mail->AltBody = $msg['text'];
+    } catch (MailerException $e) {
+        // Couldn't even build the message — fail every recipient identically.
+        foreach ($recipients as $i => $rcpt) {
+            $result = [
+                'success'       => false,
+                'smtp_response' => null,
+                'message_id'    => null,
+                'error_message' => 'Mailer init failed: ' . $e->getMessage(),
+            ];
+            $results[$i] = $result;
+            if ($perRecipient) {
+                $perRecipient($i, $rcpt, $result);
+            }
+        }
+        return $results;
+    }
+
+    foreach ($recipients as $i => $rcpt) {
+        try {
+            $mail->clearAddresses();
+            $mail->addAddress($rcpt);
+            $mail->send();
+            $result = [
+                'success'       => true,
+                'smtp_response' => trim((string)$mail->ErrorInfo) ?: 'OK',
+                'message_id'    => trim($mail->getLastMessageID(), '<>') ?: null,
+                'error_message' => null,
+            ];
+        } catch (MailerException $e) {
+            $result = [
+                'success'       => false,
+                'smtp_response' => trim((string)$mail->ErrorInfo) ?: null,
+                'message_id'    => null,
+                'error_message' => $e->getMessage(),
+            ];
+        }
+        $results[$i] = $result;
+        if ($perRecipient) {
+            $perRecipient($i, $rcpt, $result);
+        }
+    }
+
+    $mail->smtpClose();
+    return $results;
+}
+
+/**
  * Renders a template file with the given $data and $subject. The template
  * must return an array with 'html' and 'text' keys.
  *

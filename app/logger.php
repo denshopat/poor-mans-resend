@@ -4,13 +4,18 @@ declare(strict_types=1);
 function log_insert(PDO $db, array $row): int
 {
     $sql = 'INSERT INTO email_log
-        (source_app, template, from_email, to_email, reply_to_email, subject,
+        (batch_id, batch_size, batch_index,
+         source_app, template, from_email, to_email, reply_to_email, subject,
          status, request_json, remote_ip)
         VALUES
-        (:source_app, :template, :from_email, :to_email, :reply_to_email,
+        (:batch_id, :batch_size, :batch_index,
+         :source_app, :template, :from_email, :to_email, :reply_to_email,
          :subject, :status, :request_json, :remote_ip)';
     $stmt = $db->prepare($sql);
     $stmt->execute([
+        ':batch_id'       => $row['batch_id'] ?? null,
+        ':batch_size'     => $row['batch_size'] ?? null,
+        ':batch_index'    => $row['batch_index'] ?? null,
         ':source_app'     => $row['source_app'],
         ':template'       => $row['template'],
         ':from_email'     => $row['from_email'],

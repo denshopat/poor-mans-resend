@@ -56,6 +56,19 @@ Create a MySQL database and user in cPanel, then load the schema:
 mysql -u CPANELUSER_mailuser -p CPANELUSER_maildb < sql/schema.sql
 ```
 
+### Applying migrations to an existing deployment
+
+For deployments that pre-date the fan-out columns, apply migrations from
+`sql/migrations/` in numerical order:
+
+```bash
+mysql -u CPANELUSER_mailuser -p CPANELUSER_maildb \
+  < sql/migrations/001_add_batch_columns.sql
+```
+
+Each migration is additive and safe to apply against rows written by older
+versions — existing single-recipient rows simply leave the new columns NULL.
+
 ## Configure
 
 ```bash
@@ -145,6 +158,76 @@ Expected validation-failure shape:
   "details": { "to": "Invalid email address" }
 }
 ```
+
+## Sending to multiple recipients (fan-out)
+
+`to` accepts either a single email string (legacy shape, single SMTP send,
+one `email_log` row) or an array of email strings. With an array, the relay
+fans out: one SMTP send and one `email_log` row per recipient, all linked
+by a generated `batch_id`. Recipients never appear in each other's `To:`
+headers — each recipient sees only their own address.
+
+```bash
+curl -X POST "https://yourdomain.example/mail-api/send.php" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_SECRET_API_KEY" \
+  -d '{
+    "to": ["a@example.com", "b@example.com", "c@example.com"],
+    "from": "Office <office@honeymonster.com.au>",
+    "subject": "Multi-recipient test",
+    "html": "<p>Hello</p>"
+  }'
+```
+
+Batch success response (all recipients delivered, HTTP 200):
+
+```json
+{
+  "success": true,
+  "batch_id": "1c5b8e8a-4a3f-4f78-9a14-2c5b1d8d3f01",
+  "count": 3,
+  "summary": { "sent": 3, "failed": 0 },
+  "results": [
+    { "to": "a@example.com", "id": 124, "status": "sent", "message_id": "<...>" },
+    { "to": "b@example.com", "id": 125, "status": "sent", "message_id": "<...>" },
+    { "to": "c@example.com", "id": 126, "status": "sent", "message_id": "<...>" }
+  ]
+}
+```
+
+Partial-failure response (some sent, some failed, HTTP 207):
+
+```json
+{
+  "success": false,
+  "batch_id": "1c5b8e8a-...",
+  "count": 3,
+  "summary": { "sent": 2, "failed": 1 },
+  "results": [
+    { "to": "a@example.com", "id": 124, "status": "sent",   "message_id": "<...>" },
+    { "to": "b@example.com", "id": 125, "status": "failed", "error": "..." },
+    { "to": "c@example.com", "id": 126, "status": "sent",   "message_id": "<...>" }
+  ]
+}
+```
+
+All-failed batches return HTTP 502 with the same `results` shape.
+
+**Implementation notes:**
+
+- Duplicate addresses in `to` are silently deduped (case-insensitive on the
+  full email).
+- The array is capped at `max_recipients` (default 100, configurable in
+  `config.php`). Larger batches should be split caller-side or use a
+  dedicated bulk endpoint.
+- A single TCP/TLS/AUTH handshake is reused across the whole batch via
+  `SMTPKeepAlive` — fan-out cost is dominated by SMTP RTT, not setup.
+- The shared `request_json` payload is stored only on the first row of a
+  batch (where `batch_index = 0`); other rows reference the batch via
+  `batch_id`. Avoids ballooning disk on large fan-outs.
+- Single-recipient sends (whether passed as a bare string or as a one-item
+  array) leave `batch_id`, `batch_size`, and `batch_index` NULL — the
+  response shape and HTTP codes are unchanged from the pre-fan-out version.
 
 ## Inspect logs
 

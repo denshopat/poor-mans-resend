@@ -56,4 +56,11 @@ return [
     // also configure post_max_size in php.ini for the cPanel account).
     'max_body_bytes' => 102400, // 100 KB
 
+    // Maximum recipients per request when `to` is an array. Fan-out beyond
+    // this number is rejected at validation. Raise cautiously — synchronous
+    // SMTP sends scale linearly with this value, and very large bursts can
+    // trip per-hour mailbox limits on the cPanel host. For real bulk
+    // newsletters, batch on the caller side or build a dedicated queue.
+    'max_recipients' => 100,
+
 ];

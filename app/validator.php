@@ -61,11 +61,17 @@ function validate_payload(array $payload, string $sourceApp, array $config): arr
         $errors['template'] = 'Either template or html is required';
     }
 
+    // `to` accepts either a string (single recipient — legacy shape) or an
+    // array of strings (fan-out: one SMTP send + one email_log row per
+    // recipient, all linked by a batch_id). Internally we always normalise
+    // to a deduped string[] so send.php has one code path.
     $to = $payload['to'] ?? null;
-    if (!is_string($to) || !filter_var($to, FILTER_VALIDATE_EMAIL)) {
-        $errors['to'] = 'Invalid email address';
+    $maxRecipients = (int)($config['max_recipients'] ?? 100);
+    [$normalizedTo, $toError] = normalize_recipients($to, $maxRecipients);
+    if ($toError !== null) {
+        $errors['to'] = $toError;
     } else {
-        $out['to'] = $to;
+        $out['to'] = $normalizedTo;
     }
 
     $from = $payload['from'] ?? null;
@@ -110,6 +116,47 @@ function validate_payload(array $payload, string $sourceApp, array $config): arr
     }
 
     return [$out, $errors];
+}
+
+/**
+ * Normalises a `to` field accepting either a string or array of strings.
+ * Returns [string[]|null, error|null]. Trims, lowercases, dedupes (case-
+ * insensitive on the address), validates each entry, and enforces $max.
+ */
+function normalize_recipients(mixed $input, int $max): array
+{
+    if (is_string($input)) {
+        $input = [$input];
+    }
+    if (!is_array($input) || $input === []) {
+        return [null, 'Required (string or non-empty array of email addresses)'];
+    }
+
+    $seen = [];
+    $out  = [];
+    foreach ($input as $i => $value) {
+        if (!is_string($value)) {
+            return [null, "Entry $i: must be a string"];
+        }
+        $email = trim($value);
+        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            return [null, "Entry $i: invalid email address"];
+        }
+        $key = strtolower($email);
+        if (isset($seen[$key])) {
+            continue;
+        }
+        $seen[$key] = true;
+        $out[] = $email;
+    }
+
+    if ($out === []) {
+        return [null, 'Required (string or non-empty array of email addresses)'];
+    }
+    if (count($out) > $max) {
+        return [null, "Too many recipients (max $max per request)"];
+    }
+    return [$out, null];
 }
 
 /** Parses "Name <email@host>" or bare "email@host" into [name|null, email]. */
