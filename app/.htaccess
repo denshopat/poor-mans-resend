@@ -1,0 +1,10 @@
+# Fallback protection for shared hosting where app/ cannot be placed outside
+# public_html. Preferred: deploy app/ above the document root entirely.
+
+<IfModule mod_authz_core.c>
+    Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+</IfModule>

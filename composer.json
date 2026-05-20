@@ -1,0 +1,13 @@
+{
+    "name": "fullcommercestack/mail-api",
+    "description": "Transactional email relay for FCS instances. PHP + PHPMailer + cPanel SMTP.",
+    "type": "project",
+    "license": "proprietary",
+    "require": {
+        "php": ">=8.1",
+        "phpmailer/phpmailer": "^6.9"
+    },
+    "config": {
+        "sort-packages": true
+    }
+}

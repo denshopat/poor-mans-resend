@@ -1,0 +1,16 @@
+Options -Indexes
+
+# Tell send.php where the app/ directory lives (outside public_html).
+SetEnv MAIL_API_ROOT /home/honeymonster/mail-api
+
+# Only send.php is intended to be reachable here. Block anything else just in
+# case other files are mistakenly dropped into this directory.
+<FilesMatch "^(?!send\.php$).*$">
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
+</FilesMatch>
