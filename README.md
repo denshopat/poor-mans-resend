@@ -98,6 +98,9 @@ Fill in:
   `php -r "echo bin2hex(random_bytes(32)).PHP_EOL;"`. One key per client app.
 - **sender_allowlist** — which `from` addresses each `source_app` is allowed
   to send as. Entries starting with `@` match any local-part on that domain.
+  **Important:** allowlist passing is necessary but **not** sufficient — see
+  ["Sender addresses must exist as real cPanel mailboxes"](#sender-addresses-must-exist-as-real-cpanel-mailboxes)
+  below before configuring this.
 - **allowed_templates** — names of template files that may be requested.
 
 Keep `app/config.php` outside git — `.gitignore` already excludes it.
@@ -138,6 +141,58 @@ After deploying, the endpoint is:
 ```
 https://yourdomain.example/mail/send.php
 ```
+
+## Sender addresses must exist as real cPanel mailboxes
+
+This is the single biggest footgun. Read it before you send your first message.
+
+The `sender_allowlist` in `config.php` controls which `from` addresses the
+relay *itself* will accept. It does **not** control which addresses cPanel's
+SMTP server (exim, on most cPanel hosts) will actually deliver. Those are two
+different gates, and exim has its own opinion.
+
+**The rule:** every `from` address you intend to use must either
+
+1. **Be a real cPanel mailbox or alias on the sending domain**, *or*
+2. **Match the SMTP auth user** you configured under `smtp` in `config.php`.
+
+If neither is true, exim performs sender verification, **silently drops the
+message**, and you get **no bounce, nothing in the Gmail spam folder, nothing
+at all**. Worse — and this is the trap — the mail-api layer **still returns
+`success: true`, status `sent`, a populated `message_id`, and `smtp_response`
+that looks like an OK**, because exim accepted the SMTP transaction before
+deciding to drop the mail. The `email_log` row will look identical to a
+successful send.
+
+**How to verify** for any `from` local-part you plan to use:
+
+1. Create the mailbox or alias in cPanel → Email Accounts (or → Forwarders for
+   an alias).
+2. Send a test through `send.php` to a **mailinator** address (no spam
+   filtering, no Gmail tab triage) — e.g. `your-test-name@mailinator.com`.
+   Check the inbox at `https://www.mailinator.com/v4/public/inboxes.jsp?to=your-test-name`.
+3. If it arrives in mailinator: that `from` works. If it doesn't: the mailbox
+   doesn't exist, isn't aliased, or your SPF/DKIM is misconfigured.
+
+**Easy path** (single tenant, single domain): set the SMTP auth user (the
+mailbox you configured under `smtp`) as the only `from` address you ever use,
+and put the brand identity in `reply_to` and the display name:
+
+```json
+{
+  "from": "Acme Orders <info@yourdomain.example>",
+  "reply_to": "support@yourdomain.example",
+  ...
+}
+```
+
+`info@yourdomain.example` is your SMTP auth user — always safe. The display
+name (`Acme Orders`) is what most users see; the reply-to handles routing.
+
+**Harder path** (multiple distinct senders like `orders@`, `support@`,
+`hello@`): create each one as a real cPanel mailbox or alias forwarding to the
+mailbox you actually read, then test-send each one to mailinator before
+trusting it.
 
 ## Test with curl
 
@@ -300,7 +355,9 @@ exactly if needed.
 
 - `status = sent` means the SMTP server **accepted** the message, not that
   it landed in the recipient's inbox. Bounces and spam-folder delivery
-  happen downstream and are not visible here.
+  happen downstream and are not visible here. In particular, cPanel exim will
+  silently drop messages whose `from` doesn't resolve to a real local mailbox
+  — see ["Sender addresses must exist as real cPanel mailboxes"](#sender-addresses-must-exist-as-real-cpanel-mailboxes).
 - Delivery quality depends entirely on the SMTP host's IP reputation and
   the DKIM/SPF/DMARC records on the sending domain. Verify those are set
   up correctly in cPanel → Email Deliverability for every sending domain.
