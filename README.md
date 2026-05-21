@@ -1,18 +1,30 @@
-# mail-api
+# Poor Man's Resend
 
-Lightweight transactional email relay. FCS instances POST JSON jobs; this
-service authenticates, validates, logs to MySQL, and sends via authenticated
-SMTP using PHPMailer. Designed to run on a cPanel/Verpex account whose
-mailboxes are the actual sending identities.
+A self-hosted transactional email relay you can park on cheap shared hosting.
+Client apps POST JSON jobs; this service authenticates, validates, logs to
+MySQL, and sends via authenticated SMTP using PHPMailer. Designed to run on a
+cPanel-style account whose mailboxes are the actual sending identities — so
+SPF/DKIM/DMARC are aligned out of the box and you're not renting deliverability
+from a third party.
 
-This is intentionally not part of the FCS Node/TS monolith — it lives on
-separate infrastructure (the cPanel mail host) so it can use the platform's
-native PHP runtime without dragging PHP into the main app.
+Why PHP? Because shared hosting runs PHP everywhere for $5/month, and cPanel
+already manages the SMTP credentials for you. The whole service is ~600 lines.
+You can absolutely call it from a Node, Python, Go, or Rust app — it's just
+HTTP + JSON.
+
+## Use cases
+
+- You have one or more small sites that need transactional email (password
+  resets, contact forms, order confirmations) and don't want to pay Resend /
+  Postmark / SendGrid per-seat or per-volume.
+- You want one shared relay across several apps, with per-app API keys, a
+  per-app sender allowlist, and a single `email_log` table to audit from.
+- You're fine being on the hook for deliverability on your own domain(s).
 
 ## Layout
 
 ```
-mail-api/
+poor-mans-resend/
   public/
     send.php          # the only file exposed via HTTP
     .htaccess         # blocks everything except send.php
@@ -31,6 +43,7 @@ mail-api/
     .htaccess         # belt-and-braces deny-all if app/ ends up under public_html
   sql/
     schema.sql
+    migrations/
   composer.json
   README.md
 ```
@@ -40,7 +53,7 @@ mail-api/
 On the cPanel server:
 
 ```bash
-cd ~/mail-api          # or wherever you uploaded the repo
+cd ~/poor-mans-resend  # or wherever you uploaded the repo
 composer install --no-dev --optimize-autoloader
 ```
 
@@ -82,7 +95,7 @@ Fill in:
 - **smtp** — host (usually `mail.yourdomain.com`), port (465 for SSL or 587 for
   TLS), the mailbox username and password
 - **api_keys** — map of bearer-token → `source_app`. Generate keys with
-  `php -r "echo bin2hex(random_bytes(32)).PHP_EOL;"`. One key per FCS instance.
+  `php -r "echo bin2hex(random_bytes(32)).PHP_EOL;"`. One key per client app.
 - **sender_allowlist** — which `from` addresses each `source_app` is allowed
   to send as. Entries starting with `@` match any local-part on that domain.
 - **allowed_templates** — names of template files that may be requested.
@@ -95,50 +108,53 @@ Keep `app/config.php` outside git — `.gitignore` already excludes it.
 served as raw PHP if a config goes wrong:
 
 ```
-/home/USERNAME/mail-api/                    # the app/ side
+/home/USERNAME/poor-mans-resend/             # the app/ side
     app/
     sql/
     vendor/
     composer.json
-/home/USERNAME/public_html/mail-api/        # the public/ side
+/home/USERNAME/public_html/mail/             # the public/ side
     send.php
     .htaccess
 ```
 
-Edit `public_html/mail-api/.htaccess` (or your account-level `.htaccess`) to
-set the env var that tells `send.php` where the app directory lives:
+(You can pick any URL path you like for the public side — `mail`, `mail-api`,
+`send`, whatever.)
+
+Edit `public_html/mail/.htaccess` (or your account-level `.htaccess`) to set
+the env var that tells `send.php` where the app directory lives:
 
 ```apache
-SetEnv MAIL_API_ROOT /home/USERNAME/mail-api
+SetEnv MAIL_API_ROOT /home/USERNAME/poor-mans-resend
 ```
 
 **Fallback layout** — if your host insists everything must live under
-`public_html`, deploy the whole repo as `public_html/mail-api/`. The
+`public_html`, deploy the whole repo as `public_html/mail/`. The
 `app/.htaccess` shipped in this repo will deny direct access to it, but
 deploying outside `public_html` remains safer.
 
 After deploying, the endpoint is:
 
 ```
-https://yourdomain.example/mail-api/send.php
+https://yourdomain.example/mail/send.php
 ```
 
 ## Test with curl
 
 ```bash
-curl -X POST "https://yourdomain.example/mail-api/send.php" \
+curl -X POST "https://yourdomain.example/mail/send.php" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_SECRET_API_KEY" \
   -d '{
-    "source_app": "honeyshop",
+    "source_app": "myshop",
     "template": "generic_notification",
-    "to": "client@example.com",
-    "from": "Office <office@honeymonster.com.au>",
-    "reply_to": "office@honeymonster.com.au",
+    "to": "customer@example.com",
+    "from": "Office <office@yourdomain.example>",
+    "reply_to": "office@yourdomain.example",
     "subject": "Test email",
     "data": {
-      "name": "Patrick",
-      "message": "This is a test email from the mail API."
+      "name": "Alex",
+      "message": "This is a test email from the mail relay."
     }
   }'
 ```
@@ -168,12 +184,12 @@ by a generated `batch_id`. Recipients never appear in each other's `To:`
 headers — each recipient sees only their own address.
 
 ```bash
-curl -X POST "https://yourdomain.example/mail-api/send.php" \
+curl -X POST "https://yourdomain.example/mail/send.php" \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer YOUR_SECRET_API_KEY" \
   -d '{
     "to": ["a@example.com", "b@example.com", "c@example.com"],
-    "from": "Office <office@honeymonster.com.au>",
+    "from": "Office <office@yourdomain.example>",
     "subject": "Multi-recipient test",
     "html": "<p>Hello</p>"
   }'
@@ -260,10 +276,10 @@ exactly if needed.
 - **HTTPS only.** Never send API keys over plain HTTP. Force HTTPS at the
   cPanel level (AutoSSL + a redirect rule).
 - **Rotate API keys** by adding a new entry to `api_keys`, switching the
-  caller, then removing the old one. Each FCS instance gets its own key.
+  caller, then removing the old one. Each client app gets its own key.
 - **The body's `source_app` is not trusted.** The bearer token determines
   which source_app the request belongs to; the body field is only cross-checked.
-- **Sender allowlist is enforced.** An FCS instance can only send `from`
+- **Sender allowlist is enforced.** A client app can only send `from`
   addresses configured for its source_app, even if it knows the key.
 - **Template names are an allowlist.** Arbitrary template paths cannot be
   requested. `basename()` is also applied as defence-in-depth against
@@ -275,7 +291,7 @@ exactly if needed.
 - **Rate limiting** is not implemented in PHP. If you need it, the simplest
   options on cPanel are:
   1. Cloudflare in front of the domain with a Rate Limit rule on the
-     `/mail-api/send.php` path.
+     `send.php` path.
   2. mod_evasive at the Apache level.
   3. A small MySQL counter (per `source_app`, per minute) added to this
      codebase — straightforward but not built in yet.
@@ -289,7 +305,11 @@ exactly if needed.
   the DKIM/SPF/DMARC records on the sending domain. Verify those are set
   up correctly in cPanel → Email Deliverability for every sending domain.
 - The relay is **synchronous** — `send.php` does not return until SMTP has
-  responded. Calls from FCS should treat this as a slow endpoint (few hundred
-  ms to a few seconds) and probably push the call onto a queue.
+  responded. Callers should treat this as a slow endpoint (few hundred ms to a
+  few seconds) and probably push the call onto a queue.
 - There is no retry logic. If SMTP fails, the row is marked `failed` and
   the caller can re-submit.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
