@@ -21,6 +21,7 @@ function validate_payload(array $payload, string $sourceApp, array $config): arr
         'reply_to'   => null,
         'subject'    => null,
         'data'       => [],
+        'attachments' => [],
     ];
 
     if (isset($payload['source_app']) && $payload['source_app'] !== $sourceApp) {
@@ -115,7 +116,95 @@ function validate_payload(array $payload, string $sourceApp, array $config): arr
         }
     }
 
+    if (isset($payload['attachments'])) {
+        [$attachments, $attError] = validate_attachments(
+            $payload['attachments'],
+            (int)($config['max_attachments'] ?? 10),
+            (int)($config['max_attachment_total_bytes'] ?? 10485760)
+        );
+        if ($attError !== null) {
+            $errors['attachments'] = $attError;
+        } else {
+            $out['attachments'] = $attachments;
+        }
+    }
+
     return [$out, $errors];
+}
+
+/**
+ * Validates the `attachments` field: a list of objects, each with a
+ * `filename`, base64 `content`, and optional `content_type`. Content is
+ * decoded here so downstream code only ever handles raw bytes, and the
+ * combined *decoded* size is enforced against $maxTotalBytes.
+ *
+ * Returns [attachments|null, error|null] where each attachment is
+ * ['filename' => string, 'content' => raw bytes, 'content_type' => string]
+ * (content_type is '' when not supplied — PHPMailer then infers it from
+ * the filename extension).
+ */
+function validate_attachments(mixed $input, int $maxCount, int $maxTotalBytes): array
+{
+    if (!is_array($input) || !array_is_list($input)) {
+        return [null, 'Must be an array of attachment objects'];
+    }
+    if (count($input) > $maxCount) {
+        return [null, "Too many attachments (max $maxCount per request)"];
+    }
+
+    $total = 0;
+    $out   = [];
+    foreach ($input as $i => $att) {
+        if (!is_array($att)) {
+            return [null, "Entry $i: must be an object"];
+        }
+
+        $filename = $att['filename'] ?? null;
+        if (!is_string($filename) || trim($filename) === '') {
+            return [null, "Entry $i: filename is required"];
+        }
+        $filename = trim($filename);
+        if (strlen($filename) > 255) {
+            return [null, "Entry $i: filename too long (max 255 bytes)"];
+        }
+        // No path separators or control characters — the name goes into a
+        // MIME header and must never look like a filesystem path.
+        if (preg_match('#[/\\\\\x00-\x1f\x7f]#', $filename)) {
+            return [null, "Entry $i: filename contains invalid characters"];
+        }
+
+        $content = $att['content'] ?? null;
+        if (!is_string($content) || $content === '') {
+            return [null, "Entry $i: content is required (base64-encoded)"];
+        }
+        $decoded = base64_decode($content, true);
+        if ($decoded === false) {
+            return [null, "Entry $i: content is not valid base64"];
+        }
+
+        $total += strlen($decoded);
+        if ($total > $maxTotalBytes) {
+            return [null, "Combined attachment size exceeds $maxTotalBytes bytes (decoded)"];
+        }
+
+        $contentType = '';
+        if (isset($att['content_type'])) {
+            if (!is_string($att['content_type'])
+                || !preg_match('#^[\w.+-]+/[\w.+-]+$#', $att['content_type'])
+            ) {
+                return [null, "Entry $i: invalid content_type"];
+            }
+            $contentType = $att['content_type'];
+        }
+
+        $out[] = [
+            'filename'     => $filename,
+            'content'      => $decoded,
+            'content_type' => $contentType,
+        ];
+    }
+
+    return [$out, null];
 }
 
 /**

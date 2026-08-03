@@ -54,7 +54,20 @@ return [
 
     // Reject request bodies larger than this many bytes (defence-in-depth;
     // also configure post_max_size in php.ini for the cPanel account).
-    'max_body_bytes' => 102400, // 100 KB
+    // Attachments arrive base64-encoded inside the JSON body (~1.37x their
+    // real size), so this must be comfortably larger than
+    // max_attachment_total_bytes. If you don't use attachments, drop this
+    // back to 102400 (100 KB).
+    'max_body_bytes' => 15728640, // 15 MB
+
+    // Maximum number of attachments per request.
+    'max_attachments' => 10,
+
+    // Combined *decoded* size of all attachments per request. Keep this
+    // under your SMTP host's message size limit (cPanel/exim commonly caps
+    // messages at 10-50 MB — check with your host) minus headroom for the
+    // MIME re-encoding of the message body.
+    'max_attachment_total_bytes' => 10485760, // 10 MB
 
     // Maximum recipients per request when `to` is an array. Fan-out beyond
     // this number is rejected at validation. Raise cautiously — synchronous

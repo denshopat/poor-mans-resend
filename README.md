@@ -300,6 +300,56 @@ All-failed batches return HTTP 502 with the same `results` shape.
   array) leave `batch_id`, `batch_size`, and `batch_index` NULL — the
   response shape and HTTP codes are unchanged from the pre-fan-out version.
 
+## Attachments
+
+Add an `attachments` array to the payload. Each entry is an object with:
+
+- `filename` (required) — the name shown to the recipient. No path
+  separators or control characters; max 255 bytes.
+- `content` (required) — the file's bytes, base64-encoded.
+- `content_type` (optional) — MIME type like `application/pdf`. When
+  omitted, it's inferred from the filename extension.
+
+```bash
+curl -X POST "https://yourdomain.example/mail/send.php" \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer YOUR_SECRET_API_KEY" \
+  -d "{
+    \"to\": \"customer@example.com\",
+    \"from\": \"Office <office@yourdomain.example>\",
+    \"subject\": \"Your invoice\",
+    \"html\": \"<p>Invoice attached.</p>\",
+    \"attachments\": [
+      {
+        \"filename\": \"invoice-042.pdf\",
+        \"content\": \"$(base64 -w0 invoice-042.pdf)\",
+        \"content_type\": \"application/pdf\"
+      }
+    ]
+  }"
+```
+
+Attachments work in both send modes (`template` and passthrough `html`) and
+with fan-out `to` arrays — every recipient in a batch gets the same
+attachments, and they're encoded once per SMTP send over the shared
+connection.
+
+**Limits** (all tunable in `config.php`):
+
+- `max_attachments` — entries per request (default 10).
+- `max_attachment_total_bytes` — combined **decoded** size (default 10 MB).
+  Keep this under your SMTP host's per-message cap; exim on shared cPanel
+  hosts often limits messages to somewhere in the 10–50 MB range.
+- `max_body_bytes` — the whole JSON body, which carries attachments in
+  base64 (~1.37× their real size). The example config sets 15 MB; also
+  raise `post_max_size` in php.ini to match, or uploads will die before
+  PHP hands the request to `send.php`.
+
+**Logging:** the `request_json` stored in `email_log` replaces each
+attachment's `content` with `{filename, content_type, size}` metadata —
+attachment bytes are never written to the database, and a logged request
+containing attachments therefore cannot be replayed verbatim.
+
 ## Inspect logs
 
 Every request — even rejected ones that get as far as validation passing —
@@ -341,8 +391,12 @@ exactly if needed.
   path traversal.
 - **All template `data` is HTML-escaped** by the templates. The JSON body
   cannot inject raw HTML into rendered emails.
-- **Body size is capped** (default 100 KB; tune `max_body_bytes` in config
-  and `post_max_size` in php.ini).
+- **Body size is capped** (`max_body_bytes` in config, mirrored by
+  `post_max_size` in php.ini). The example config allows 15 MB to leave room
+  for base64 attachments; tighten it if you don't send any.
+- **Attachment limits are enforced** — count (`max_attachments`), combined
+  decoded size (`max_attachment_total_bytes`), strict base64 validation, and
+  filename sanitisation (no path separators or control characters).
 - **Rate limiting** is not implemented in PHP. If you need it, the simplest
   options on cPanel are:
   1. Cloudflare in front of the domain with a Rate Limit rule on the

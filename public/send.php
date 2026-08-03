@@ -114,6 +114,23 @@ if ($msg['html'] !== null) {
     }
 }
 
+// Attachment bytes would balloon email_log (base64 in request_json), so the
+// logged payload replaces each attachment's content with its metadata. The
+// original $raw is still what was validated and sent.
+$rawForLog = $raw;
+if ($msg['attachments'] !== []) {
+    $loggedPayload = $payload;
+    $loggedPayload['attachments'] = array_map(
+        static fn(array $att) => [
+            'filename'     => $att['filename'],
+            'content_type' => $att['content_type'] !== '' ? $att['content_type'] : null,
+            'size'         => strlen($att['content']),
+        ],
+        $msg['attachments']
+    );
+    $rawForLog = json_encode($loggedPayload, JSON_UNESCAPED_SLASHES);
+}
+
 $recipients = $msg['to'];   // validator guarantees: non-empty string[]
 $isBatch    = count($recipients) > 1;
 $batchId    = $isBatch ? uuid_v4() : null;
@@ -135,7 +152,7 @@ foreach ($recipients as $i => $rcpt) {
         'reply_to_email' => $msg['reply_to'],
         'subject'        => $msg['subject'],
         'status'         => 'queued',
-        'request_json'   => $i === 0 ? $raw : null,
+        'request_json'   => $i === 0 ? $rawForLog : null,
         'remote_ip'      => $remoteIp,
     ]);
 }
@@ -146,12 +163,13 @@ foreach ($recipients as $i => $rcpt) {
 $results = mailer_send_many(
     $config['smtp'],
     [
-        'from_email' => $msg['from_email'],
-        'from_name'  => $msg['from_name'],
-        'reply_to'   => $msg['reply_to'],
-        'subject'    => $msg['subject'],
-        'html'       => $rendered['html'],
-        'text'       => $rendered['text'],
+        'from_email'  => $msg['from_email'],
+        'from_name'   => $msg['from_name'],
+        'reply_to'    => $msg['reply_to'],
+        'subject'     => $msg['subject'],
+        'html'        => $rendered['html'],
+        'text'        => $rendered['text'],
+        'attachments' => $msg['attachments'],
     ],
     $recipients,
     function (int $i, string $rcpt, array $result) use ($db, $logIds) {

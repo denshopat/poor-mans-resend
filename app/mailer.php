@@ -33,6 +33,7 @@ function mailer_send(array $smtpConfig, array $msg): array
         $mail->isHTML(true);
         $mail->Body    = $msg['html'];
         $mail->AltBody = $msg['text'];
+        mailer_add_attachments($mail, $msg['attachments'] ?? []);
 
         $mail->send();
 
@@ -90,6 +91,9 @@ function mailer_send_many(array $smtpConfig, array $msg, array $recipients, ?cal
         $mail->isHTML(true);
         $mail->Body    = $msg['html'];
         $mail->AltBody = $msg['text'];
+        // Attachments survive clearAddresses() in the fan-out loop, so adding
+        // them once here covers every recipient in the batch.
+        mailer_add_attachments($mail, $msg['attachments'] ?? []);
     } catch (MailerException $e) {
         // Couldn't even build the message — fail every recipient identically.
         foreach ($recipients as $i => $rcpt) {
@@ -134,6 +138,23 @@ function mailer_send_many(array $smtpConfig, array $msg, array $recipients, ?cal
 
     $mail->smtpClose();
     return $results;
+}
+
+/**
+ * Adds validated attachments (raw bytes, already base64-decoded by the
+ * validator) to a PHPMailer instance. An empty content_type lets PHPMailer
+ * infer the MIME type from the filename extension.
+ */
+function mailer_add_attachments(PHPMailer $mail, array $attachments): void
+{
+    foreach ($attachments as $att) {
+        $mail->addStringAttachment(
+            $att['content'],
+            $att['filename'],
+            PHPMailer::ENCODING_BASE64,
+            $att['content_type']
+        );
+    }
 }
 
 /**
