@@ -187,7 +187,8 @@ $results = mailer_send_many(
                 'smtp_response' => $result['smtp_response'],
             ]);
         }
-    }
+    },
+    $config['dkim'] ?? []
 );
 
 // Single-recipient response shape is unchanged — same keys, same status codes.

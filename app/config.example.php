@@ -76,4 +76,20 @@ return [
     // newsletters, batch on the caller side or build a dedicated queue.
     'max_recipients' => 100,
 
+    // Optional DKIM signing. When set, outgoing mail is signed IF a private
+    // key exists for the From domain at <keys_dir>/<domain>.pem — domains
+    // without a key send unsigned, so a multi-tenant relay never signs one
+    // tenant's mail with another's key. keys_dir must be OUTSIDE any web
+    // docroot, keys chmod 600. Generate per domain:
+    //   openssl genrsa -out keys/example.com.pem 2048
+    //   openssl rsa -in keys/example.com.pem -pubout -outform DER | base64 -w0
+    // then publish TXT <selector>._domainkey.example.com:
+    //   "v=DKIM1; k=rsa; p=<that base64>"
+    // Do this yourself when the MTA doesn't sign — e.g. cPanel+SpamExperts
+    // smarthost setups hand mail off unsigned even with DKIM "Valid".
+    // 'dkim' => [
+    //     'selector' => 'pmr',
+    //     'keys_dir' => __DIR__ . '/../keys',
+    // ],
+
 ];

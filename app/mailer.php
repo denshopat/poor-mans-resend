@@ -5,10 +5,37 @@ use PHPMailer\PHPMailer\PHPMailer;
 use PHPMailer\PHPMailer\Exception as MailerException;
 
 /**
+ * DKIM-signs the message when a private key exists for the From domain.
+ * Multi-tenant by construction: the key is looked up per sending domain
+ * ($keysDir/<domain>.pem), so tenants without a key send unsigned exactly
+ * as before — never signed with another tenant's key. Signing here (rather
+ * than trusting the MTA) survives smarthost routes that don't sign, e.g.
+ * cPanel+SpamExperts where exim hands off unsigned.
+ */
+function mailer_apply_dkim(PHPMailer $mail, array $dkimConfig, string $fromEmail): void
+{
+    if (empty($dkimConfig['keys_dir']) || empty($dkimConfig['selector'])) {
+        return;
+    }
+    $domain = strtolower(substr(strrchr($fromEmail, '@') ?: '', 1));
+    if ($domain === '') {
+        return;
+    }
+    $keyFile = rtrim($dkimConfig['keys_dir'], '/') . '/' . basename($domain) . '.pem';
+    if (!is_file($keyFile)) {
+        return;
+    }
+    $mail->DKIM_domain   = $domain;
+    $mail->DKIM_selector = $dkimConfig['selector'];
+    $mail->DKIM_private  = $keyFile;
+    $mail->DKIM_identity = $fromEmail;
+}
+
+/**
  * Sends an email through the configured SMTP server.
  * Returns [success, smtp_response, message_id, error_message].
  */
-function mailer_send(array $smtpConfig, array $msg): array
+function mailer_send(array $smtpConfig, array $msg, array $dkimConfig = []): array
 {
     $mail = new PHPMailer(true);
     try {
@@ -25,6 +52,7 @@ function mailer_send(array $smtpConfig, array $msg): array
         $mail->CharSet    = 'UTF-8';
 
         $mail->setFrom($msg['from_email'], $msg['from_name'] ?? '');
+        mailer_apply_dkim($mail, $dkimConfig, $msg['from_email']);
         $mail->addAddress($msg['to']);
         if (!empty($msg['reply_to'])) {
             $mail->addReplyTo($msg['reply_to']);
@@ -64,7 +92,7 @@ function mailer_send(array $smtpConfig, array $msg): array
  * Returns an array of per-recipient results (same shape as mailer_send),
  * indexed positionally to $recipients.
  */
-function mailer_send_many(array $smtpConfig, array $msg, array $recipients, ?callable $perRecipient = null): array
+function mailer_send_many(array $smtpConfig, array $msg, array $recipients, ?callable $perRecipient = null, array $dkimConfig = []): array
 {
     $mail = new PHPMailer(true);
     $results = [];
@@ -84,6 +112,7 @@ function mailer_send_many(array $smtpConfig, array $msg, array $recipients, ?cal
         $mail->SMTPKeepAlive = true;
 
         $mail->setFrom($msg['from_email'], $msg['from_name'] ?? '');
+        mailer_apply_dkim($mail, $dkimConfig, $msg['from_email']);
         if (!empty($msg['reply_to'])) {
             $mail->addReplyTo($msg['reply_to']);
         }
